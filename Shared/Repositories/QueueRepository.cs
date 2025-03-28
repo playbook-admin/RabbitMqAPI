@@ -48,13 +48,11 @@ public class QueueRepository : IQueueRepository
         var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
 
         // cleanup
-        await channel.CloseAsync();
-        await connection.CloseAsync();
+        await channel.CloseAsync(); // This is NOT Dispose, only closing the channel
+        await connection.CloseAsync(); // This is NOT Dispose, only closing the channel
 
         return completedTask == tcs.Task ? await tcs.Task : null;
     }
-
-
 
     public async Task<int> AddClientQueueItemAsync(QueueEntity entity)
     {
@@ -116,8 +114,8 @@ public class QueueRepository : IQueueRepository
         var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
 
         // cleanup
-        await channel.CloseAsync();
-        await connection.CloseAsync();
+        await channel.CloseAsync(); // This is NOT Dispose, only closing the channel
+        await connection.CloseAsync(); // This is NOT Dispose, only closing the channel
 
         return completedTask == tcs.Task ? await tcs.Task : null;
     }
