@@ -14,44 +14,67 @@ public class QueueRepository : IQueueRepository
     private readonly string _clientQueueName = "ClientQueue";
     private readonly string _serverQueueName = "ServerQueue";
 
-    public async Task<QueueEntity> GetMessageFromClientQueueAsync()
+
+    public async Task<QueueEntity> ConsumeSingleMessageAsync(string queueName, TimeSpan timeout, Guid? correlationId=null,  CancellationToken cancellationToken = default)
     {
+        var tcs = new TaskCompletionSource<QueueEntity>();
+
         var connection = await RabbitMqHelper.CreateConnection();
         var channel = await RabbitMqHelper.CreateChannelAsync(connection);
 
-        await channel.QueueDeclareAsync(_clientQueueName, durable: true, exclusive: false, autoDelete: false);
-
-        var tcs = new TaskCompletionSource<QueueEntity>();
-
-        var consumer = new AsyncEventingBasicConsumer(channel);
-
-        consumer.ReceivedAsync += async (model, ea) =>
+        try
         {
-            try
+            await channel.QueueDeclareAsync(queueName, durable: true, exclusive: false, autoDelete: false, cancellationToken: cancellationToken);
+
+            var consumer = new AsyncEventingBasicConsumer(channel);
+
+            consumer.ReceivedAsync += async (model, ea) =>
             {
-                var body = ea.Body.ToArray();
-                var message = System.Text.Json.JsonSerializer.Deserialize<QueueEntity>(body);
+                try
+                {
+                    var body = ea.Body.ToArray();
+                    var message = System.Text.Json.JsonSerializer.Deserialize<QueueEntity>(body);
 
-                await channel.BasicAckAsync(ea.DeliveryTag, multiple: false);
+                    if (message != null && ((correlationId == null) || message.CorrelationId == correlationId))
+                    {
+                        await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
+                        tcs.TrySetResult(message);
+                    }
+                    else
+                    {
+                        await channel.BasicRejectAsync(ea.DeliveryTag, requeue: true, cancellationToken);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            };
 
-                tcs.TrySetResult(message);
-            }
-            catch (Exception ex)
-            {
-                tcs.TrySetException(ex);
-            }
-        };
+            // Start consuming
+            await channel.BasicConsumeAsync(queue: queueName, autoAck: false, consumer: consumer, cancellationToken: cancellationToken);
 
-        await channel.BasicConsumeAsync(queue: _clientQueueName, autoAck: false, consumer: consumer);
+            // Wait for message, timeout, or cancellation
+            var timeoutTask = Task.Delay(timeout, cancellationToken);
+            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
 
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10));
-        var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+            if (completedTask == tcs.Task)
+                return await tcs.Task;
 
-        // cleanup
-        await channel.CloseAsync(); // This is NOT Dispose, only closing the channel
-        await connection.CloseAsync(); // This is NOT Dispose, only closing the channel
+            return null; // timeout or cancelled
+        }
+        finally
+        {
+            // This is NOT Dispose, only closing the channel
+            try { if (channel.IsOpen) await channel.CloseAsync(); } catch { }
+            try { if (connection.IsOpen) await connection.CloseAsync(); } catch { }
+        }
+    }
 
-        return completedTask == tcs.Task ? await tcs.Task : null;
+
+    public async Task<QueueEntity> GetMessageFromClientQueueAsync()
+    {
+        return await ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
     }
 
     public async Task<int> AddClientQueueItemAsync(QueueEntity entity)
@@ -61,63 +84,7 @@ public class QueueRepository : IQueueRepository
 
     public async Task<QueueEntity> GetMessageFromServerByCorrelationIdAsync(Guid correlationId)
     {
-        var connection = await RabbitMqHelper.CreateConnection();
-        var channel = await RabbitMqHelper.CreateChannelAsync(connection);
-        // Declare the queue before consuming messages from it
-        await channel.QueueDeclareAsync(_serverQueueName, durable: true, exclusive: false, autoDelete: false);
-
-        // Define the selector based on the CorrelationId
-        string selector = $"CorrelationId = '{correlationId}'";
-
-        // Create a TaskCompletionSource to complete when a message is received
-        var tcs = new TaskCompletionSource<QueueEntity>();
-
-        // Create the consumer for the queue
-        var consumer = new AsyncEventingBasicConsumer(channel);
-
-        // Set up the consumer received event handler
-        consumer.ReceivedAsync += async (model, ea) =>
-        {
-            try
-            {
-                // Deserialize the message
-                var body = ea.Body.ToArray();
-                var message = System.Text.Json.JsonSerializer.Deserialize<QueueEntity>(body);
-
-                // Check if the correlationId matches
-                if (message.CorrelationId == correlationId)
-                {
-                    // Acknowledge the message
-                    await channel.BasicAckAsync(ea.DeliveryTag, multiple: false);
-
-                    // Set the result in the TaskCompletionSource to complete the method
-                    tcs.TrySetResult(message);
-                }
-                else
-                {
-                    // Optionally, reject or ignore message if correlationId doesn't match
-                    await channel.BasicRejectAsync(ea.DeliveryTag, requeue: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                // Handle any exceptions during message processing
-                tcs.TrySetException(ex);
-            }
-        };
-
-        // Start consuming messages asynchronously with the selector (filter)
-        await channel.BasicConsumeAsync(queue: _serverQueueName, autoAck: false, consumer: consumer);
-
-        // Wait for either the message or timeout
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(10));
-        var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
-
-        // cleanup
-        await channel.CloseAsync(); // This is NOT Dispose, only closing the channel
-        await connection.CloseAsync(); // This is NOT Dispose, only closing the channel
-
-        return completedTask == tcs.Task ? await tcs.Task : null;
+        return await ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
     }
 
     public async Task<int> AddServerQueueItemAsync(QueueEntity entity)
