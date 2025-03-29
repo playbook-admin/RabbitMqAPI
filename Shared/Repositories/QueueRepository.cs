@@ -16,13 +16,13 @@ namespace Shared.Repositories;
 /// </summary>
 public class QueueRepository : IQueueRepository
 {
-    private readonly string _clientQueueName = "ClientQueue";
-    private readonly string _serverQueueName = "ServerQueue";
+    private readonly static string _clientQueueName = "ClientQueue";
+    private readonly static string _serverQueueName = "ServerQueue";
 
     /// <summary>
     /// Consumes a single message from the specified queue.
     /// </summary>
-    public async Task<QueueEntity> ConsumeSingleMessageAsync(string queueName, TimeSpan timeout, Guid? correlationId=null,  CancellationToken cancellationToken = default)
+    private async static Task<QueueEntity?> ConsumeSingleMessageAsync(string queueName, TimeSpan timeout, Guid? correlationId=null,  CancellationToken cancellationToken = default)
     {
         var tcs = new TaskCompletionSource<QueueEntity>();
 
@@ -75,7 +75,7 @@ public class QueueRepository : IQueueRepository
     /// <summary>
     /// Adds a message to the specified queue.
     /// </summary>
-    public async Task<int> AddQueueItemAsync<T>(string queueName, T entity)
+    public async static Task<int> AddQueueItemAsync<T>(string queueName, T entity)
     {
         try
         {
@@ -105,15 +105,15 @@ public class QueueRepository : IQueueRepository
 
     // --- High-level convenience methods ---
 
-    public Task<QueueEntity> GetMessageFromClientQueueAsync() =>
-        ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
+    public async Task<QueueEntity?> GetMessageFromClientQueueAsync() =>
+        await ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
 
-    public Task<int> AddClientQueueItemAsync(QueueEntity entity) =>
-        AddQueueItemAsync(_clientQueueName, entity);
+    public async Task<int> AddClientQueueItemAsync(QueueEntity entity) =>
+        await AddQueueItemAsync(_clientQueueName, entity);
 
-    public Task<QueueEntity> GetMessageFromServerByCorrelationIdAsync(Guid correlationId) =>
-        ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
+    public async Task<QueueEntity?> GetMessageFromServerByCorrelationIdAsync(Guid correlationId) =>
+        await ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
 
-    public Task<int> AddServerQueueItemAsync(QueueEntity entity) =>
-        AddQueueItemAsync(_serverQueueName, entity);
+    public async Task<int> AddServerQueueItemAsync(QueueEntity entity) =>
+        await AddQueueItemAsync(_serverQueueName, entity);
 }
