@@ -105,15 +105,15 @@ public class QueueRepository : IQueueRepository
 
     // --- High-level convenience methods ---
 
-    public async Task<QueueEntity?> GetMessageFromClientQueueAsync() =>
-        await ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
+    public Task<QueueEntity?> GetMessageFromClientQueueAsync() =>
+        ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
 
-    public async Task<int> AddClientQueueItemAsync(QueueEntity entity) =>
-        await AddQueueItemAsync(_clientQueueName, entity);
+    public Task<int> AddClientQueueItemAsync(QueueEntity entity) =>
+        AddQueueItemAsync(_clientQueueName, entity);
 
-    public async Task<QueueEntity?> GetMessageFromServerByCorrelationIdAsync(Guid correlationId) =>
-        await ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
+    public Task<QueueEntity?> GetMessageFromServerByCorrelationIdAsync(Guid correlationId) =>
+        ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
 
-    public async Task<int> AddServerQueueItemAsync(QueueEntity entity) =>
-        await AddQueueItemAsync(_serverQueueName, entity);
+    public Task<int> AddServerQueueItemAsync(QueueEntity entity) =>
+        AddQueueItemAsync(_serverQueueName, entity);
 }
