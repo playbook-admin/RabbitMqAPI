@@ -3,18 +3,25 @@ using RabbitMQ.Client.Events;
 using Shared.Helpers;
 using Shared.Models;
 using System;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
 
 namespace Shared.Repositories;
 
+/// <summary>
+/// Handles publishing and consuming messages from RabbitMQ queues.
+/// </summary>
 public class QueueRepository : IQueueRepository
 {
     private readonly string _clientQueueName = "ClientQueue";
     private readonly string _serverQueueName = "ServerQueue";
 
-
+    /// <summary>
+    /// Consumes a single message from the specified queue.
+    /// </summary>
     public async Task<QueueEntity> ConsumeSingleMessageAsync(string queueName, TimeSpan timeout, Guid? correlationId=null,  CancellationToken cancellationToken = default)
     {
         var tcs = new TaskCompletionSource<QueueEntity>();
@@ -28,14 +35,14 @@ public class QueueRepository : IQueueRepository
 
             var consumer = new AsyncEventingBasicConsumer(channel);
 
-            consumer.ReceivedAsync += async (model, ea) =>
+            consumer.ReceivedAsync += async (_, ea) =>
             {
                 try
                 {
                     var body = ea.Body.ToArray();
-                    var message = System.Text.Json.JsonSerializer.Deserialize<QueueEntity>(body);
+                    var message = JsonSerializer.Deserialize<QueueEntity>(body);
 
-                    if (message != null && ((correlationId == null) || message.CorrelationId == correlationId))
+                    if (message != null && (!correlationId.HasValue || message.CorrelationId == correlationId))
                     {
                         await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
                         tcs.TrySetResult(message);
@@ -51,17 +58,11 @@ public class QueueRepository : IQueueRepository
                 }
             };
 
-            // Start consuming
-            await channel.BasicConsumeAsync(queue: queueName, autoAck: false, consumer: consumer, cancellationToken: cancellationToken);
+            await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken);
 
-            // Wait for message, timeout, or cancellation
-            var timeoutTask = Task.Delay(timeout, cancellationToken);
-            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(timeout, cancellationToken));
 
-            if (completedTask == tcs.Task)
-                return await tcs.Task;
-
-            return null; // timeout or cancelled
+            return completedTask == tcs.Task ? await tcs.Task : null;
         }
         finally
         {
@@ -71,80 +72,48 @@ public class QueueRepository : IQueueRepository
         }
     }
 
-
-    public async Task<QueueEntity> GetMessageFromClientQueueAsync()
-    {
-        return await ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
-    }
-
-    public async Task<int> AddClientQueueItemAsync(QueueEntity entity)
-    {
-        return await AddQueueItemAsync(_clientQueueName, entity);
-    }
-
-    public async Task<QueueEntity> GetMessageFromServerByCorrelationIdAsync(Guid correlationId)
-    {
-        return await ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
-    }
-
-    public async Task<int> AddServerQueueItemAsync(QueueEntity entity)
-    {
-        return await AddQueueItemAsync(_serverQueueName, entity);
-    }
-
+    /// <summary>
+    /// Adds a message to the specified queue.
+    /// </summary>
     public async Task<int> AddQueueItemAsync<T>(string queueName, T entity)
     {
         try
         {
-            // Use the RabbitMqHelper to create a connection asynchronously
-            using (var connection = await RabbitMqHelper.CreateConnection())
-            using (var channel = await RabbitMqHelper.CreateChannelAsync(connection))
+            using var connection = await RabbitMqHelper.CreateConnection();
+            using var channel = await RabbitMqHelper.CreateChannelAsync(connection);
+
+            await channel.QueueDeclareAsync(queueName, durable: true, exclusive: false, autoDelete: false);
+
+            var json = JsonSerializer.Serialize(entity);
+            var body = Encoding.UTF8.GetBytes(json);
+
+            var properties = new BasicProperties
             {
-                // Declare the queue if not declared
-                await channel.QueueDeclareAsync(queueName, durable: true, exclusive: false, autoDelete: false);
+                CorrelationId = entity?.GetType().GetProperty("CorrelationId")?.GetValue(entity)?.ToString() ?? string.Empty
+            };
 
-                // Serialize the entity to JSON
-                var json = System.Text.Json.JsonSerializer.Serialize(entity);
+            await channel.BasicPublishAsync(string.Empty, queueName, mandatory: true, properties, new ReadOnlyMemory<byte>(body));
 
-                // Create BasicProperties (IBasicProperties)
-                var properties = new BasicProperties
-                {
-                    CorrelationId = "your-correlation-id",
-                    // Other properties like MessageId, ContentType, etc.
-                };
-
-                // Set the CorrelationId if the entity has it
-                var correlationIdProperty = typeof(T).GetProperty("CorrelationId");
-                if (correlationIdProperty != null)
-                {
-                    var correlationIdValue = correlationIdProperty.GetValue(entity)?.ToString();
-                    if (!string.IsNullOrEmpty(correlationIdValue))
-                    {
-                        properties.CorrelationId = correlationIdValue;
-                    }
-                }
-
-                // Convert the serialized entity to byte[] (message body)
-                byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
-
-                // Publish the message
-                await channel.BasicPublishAsync(
-                    exchange: "",                      // Default exchange (empty string)
-                    routingKey: queueName,             // Your queue name as the routing key
-                    mandatory: true,                   // You can set this to true or false depending on your needs
-                    basicProperties: properties,       // The BasicProperties containing your message properties
-                    body: new ReadOnlyMemory<byte>(body),  // Convert your message body to ReadOnlyMemory<byte>
-                    cancellationToken: CancellationToken.None  // Optionally pass a cancellation token
-                );
-
-                return 1; // Return 1 to indicate success
-            }
+            return 1;
         }
         catch (Exception ex)
         {
-            // Optionally log the error
-            Console.WriteLine($"An error occurred: {ex.Message}");
-            return 0; // Return 0 to indicate failure
+            Console.WriteLine($"Publish failed: {ex.Message}");
+            return 0;
         }
     }
+
+    // --- High-level convenience methods ---
+
+    public Task<QueueEntity> GetMessageFromClientQueueAsync() =>
+        ConsumeSingleMessageAsync(_clientQueueName, TimeSpan.FromSeconds(10));
+
+    public Task<int> AddClientQueueItemAsync(QueueEntity entity) =>
+        AddQueueItemAsync(_clientQueueName, entity);
+
+    public Task<QueueEntity> GetMessageFromServerByCorrelationIdAsync(Guid correlationId) =>
+        ConsumeSingleMessageAsync(_serverQueueName, TimeSpan.FromSeconds(10), correlationId);
+
+    public Task<int> AddServerQueueItemAsync(QueueEntity entity) =>
+        AddQueueItemAsync(_serverQueueName, entity);
 }
