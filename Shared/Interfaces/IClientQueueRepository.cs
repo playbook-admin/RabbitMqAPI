@@ -4,10 +4,8 @@ using System.Threading.Tasks;
 
 namespace Shared.Interfaces;
 
-public interface IQueueRepository
+public interface IClientQueueRepository
 {
-    Task<QueueEntity?> GetMessageFromClientQueueAsync();
     Task<QueueEntity?> GetMessageFromServerByCorrelationIdAsync(Guid correlationId);
     Task<int> AddClientQueueItemAsync(QueueEntity entity);
-    Task<int> AddServerQueueItemAsync(QueueEntity entity);
 }

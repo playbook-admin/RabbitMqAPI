@@ -15,7 +15,7 @@ namespace Shared.Repositories;
 /// <summary>
 /// Handles publishing and consuming messages from RabbitMQ queues.
 /// </summary>
-public class QueueRepository : IQueueRepository
+public class QueueRepository : IClientQueueRepository, IServerQueueRepository
 {
     private readonly static string _clientQueueName = "ClientQueue";
     private readonly static string _serverQueueName = "ServerQueue";
